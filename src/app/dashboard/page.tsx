@@ -81,19 +81,19 @@ export default function AdminDashboard() {
   useEffect(() => {
     fetchData();
     const channel = supabase
-      .channel("system_status")
+      .channel("db-changes")
       .on(
-        "postgres_changes",
+        "postgres_changes" as any,
         { event: "*", table: "CONTROLE_JOGOS" },
         fetchData,
       )
       .on(
-        "postgres_changes",
+        "postgres_changes" as any,
         { event: "*", table: "CONFIGURACOES_BOT" },
         fetchData,
       )
       .on(
-        "postgres_changes",
+        "postgres_changes" as any,
         { event: "INSERT", table: "HISTORICO_APOSTAS" },
         fetchData,
       )
