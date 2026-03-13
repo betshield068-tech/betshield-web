@@ -3,11 +3,14 @@
 import { createBrowserClient } from "@supabase/ssr";
 import {
   Activity,
+  Coins,
   History,
-  Lock,
-  Pause, // Novo ícone
+  Pause,
   Play,
   ShieldAlert,
+  Target,
+  TrendingDown,
+  TrendingUp,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
@@ -15,6 +18,7 @@ import { useCallback, useEffect, useState } from "react";
 interface GlobalConfig {
   cd_configuracao: number;
   sn_kill_switch_global: boolean;
+  vl_stop_win: number; // Agora editável
 }
 
 interface GameControl {
@@ -65,9 +69,6 @@ export default function AdminDashboard() {
       ]);
 
       if (configRes.error) throw configRes.error;
-      if (gamesRes.error) throw gamesRes.error;
-      if (historyRes.error) throw historyRes.error;
-
       setGlobalConfig(configRes.data);
       setGames(gamesRes.data || []);
       setHistory(historyRes.data || []);
@@ -104,69 +105,60 @@ export default function AdminDashboard() {
     };
   }, [fetchData, supabase]);
 
-  // --- COMANDOS GLOBAIS ---
+  // --- FUNÇÕES DE ATUALIZAÇÃO ---
+
+  async function updateGlobalField(field: keyof GlobalConfig, value: any) {
+    try {
+      const { error } = await supabase
+        .from("CONFIGURACOES_BOT")
+        .update({ [field]: value })
+        .eq("cd_configuracao", 1);
+      if (error) throw error;
+      setGlobalConfig((prev) => (prev ? { ...prev, [field]: value } : null));
+    } catch (error) {
+      fetchData();
+    }
+  }
+
+  async function updateGameField(
+    tp_jogo: string,
+    field: keyof GameControl,
+    value: any,
+  ) {
+    try {
+      const { error } = await supabase
+        .from("CONTROLE_JOGOS")
+        .update({ [field]: value })
+        .eq("tp_jogo", tp_jogo);
+      if (error) throw error;
+      setGames((prev) =>
+        prev.map((g) => (g.tp_jogo === tp_jogo ? { ...g, [field]: value } : g)),
+      );
+    } catch (error) {
+      fetchData();
+    }
+  }
 
   async function toggleMasterKill() {
     if (!globalConfig) return;
     const newState = !globalConfig.sn_kill_switch_global;
-    try {
-      setGlobalConfig((prev) =>
-        prev ? { ...prev, sn_kill_switch_global: newState } : prev,
-      );
+    await updateGlobalField("sn_kill_switch_global", newState);
+    if (newState) {
       await supabase
-        .from("CONFIGURACOES_BOT")
-        .update({ sn_kill_switch_global: newState })
-        .eq("cd_configuracao", 1);
-      if (newState) {
-        await supabase
-          .from("CONTROLE_JOGOS")
-          .update({ sn_ativo: false })
-          .not("tp_jogo", "is", null);
-      }
-    } catch (error) {
-      fetchData();
+        .from("CONTROLE_JOGOS")
+        .update({ sn_ativo: false })
+        .not("tp_jogo", "is", null);
     }
   }
 
-  // NOVA FUNÇÃO: Pausar ou Iniciar todos os jogos de uma vez
   async function toggleAllGames(status: boolean) {
-    if (globalConfig?.sn_kill_switch_global && status) {
-      alert("⚠️ O Kill Switch Global está ativo. Desative-o primeiro.");
-      return;
-    }
-
-    // Atualização otimista na UI
-    setGames((prev) => prev.map((g) => ({ ...g, sn_ativo: status })));
-
+    if (globalConfig?.sn_kill_switch_global && status) return;
     try {
-      const { error } = await supabase
+      await supabase
         .from("CONTROLE_JOGOS")
         .update({ sn_ativo: status })
         .not("tp_jogo", "is", null);
-      if (error) throw error;
-    } catch (error) {
       fetchData();
-    }
-  }
-
-  // --- COMANDOS INDIVIDUAIS ---
-
-  async function toggleGame(tp_jogo: string, currentStatus: boolean) {
-    if (globalConfig?.sn_kill_switch_global) {
-      alert("⚠️ O Kill Switch Global está ativo.");
-      return;
-    }
-    const newStatus = !currentStatus;
-    setGames((prev) =>
-      prev.map((game) =>
-        game.tp_jogo === tp_jogo ? { ...game, sn_ativo: newStatus } : game,
-      ),
-    );
-    try {
-      await supabase
-        .from("CONTROLE_JOGOS")
-        .update({ sn_ativo: newStatus })
-        .eq("tp_jogo", tp_jogo);
     } catch (error) {
       fetchData();
     }
@@ -174,15 +166,15 @@ export default function AdminDashboard() {
 
   if (isLoading || !globalConfig) {
     return (
-      <div className="min-h-screen bg-[#0b0f1a] flex items-center justify-center text-emerald-500 font-black italic animate-pulse">
-        CONNECTING TO SHIELD CORE...
+      <div className="min-h-screen bg-[#0b0f1a] flex items-center justify-center text-emerald-500 font-black italic animate-pulse tracking-widest">
+        SHIELD CORE CONNECTING...
       </div>
     );
   }
 
   return (
     <div className="min-h-screen bg-[#0b0f1a] text-slate-200 p-4 md:p-8 font-sans">
-      {/* KILL SWITCH SECTION */}
+      {/* HEADER / KILL SWITCH */}
       <div
         className={`mb-6 p-6 rounded-3xl border transition-all duration-500 flex flex-col md:flex-row justify-between items-center gap-6 ${
           globalConfig.sn_kill_switch_global
@@ -201,39 +193,49 @@ export default function AdminDashboard() {
               Master Kill Switch
             </h1>
             <p className="text-sm opacity-50 font-bold">
-              Corte total de energia do bot
+              Protocolo de Emergência Global
             </p>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-4">
-          <div className="hidden md:flex flex-col text-right mr-4 border-r border-slate-800 pr-6">
-            <span className="text-[10px] text-slate-500 uppercase tracking-widest font-black">
-              Meta de Lucro{" "}
+        <div className="flex flex-wrap items-center gap-6">
+          {/* META DE LUCRO EDITÁVEL */}
+          <div className="flex flex-col text-right bg-slate-950/50 p-3 px-6 rounded-2xl border border-slate-800 focus-within:border-emerald-500 transition-all">
+            <span className="text-[10px] text-slate-500 uppercase tracking-widest font-black mb-1">
+              Meta de Lucro (Stop Win)
             </span>
-            <span className="text-xs text-emerald-400 font-bold">
-              R$ 200,00
-            </span>
+            <div className="flex items-center justify-end gap-2">
+              <span className="text-emerald-500 font-bold">R$</span>
+              <input
+                type="number"
+                defaultValue={globalConfig.vl_stop_win}
+                onBlur={(e) =>
+                  updateGlobalField("vl_stop_win", Number(e.target.value))
+                }
+                className="bg-transparent text-right font-black text-white text-xl outline-none w-24"
+              />
+            </div>
           </div>
+
           <button
             onClick={toggleMasterKill}
-            className={`px-12 py-5 rounded-2xl font-black transition-all active:scale-95 ${
+            className={`px-10 py-5 rounded-2xl font-black transition-all active:scale-95 ${
               globalConfig.sn_kill_switch_global
-                ? "bg-slate-200 text-red-600 hover:bg-white"
-                : "bg-red-600 text-white hover:bg-red-500 shadow-xl shadow-red-600/20"
+                ? "bg-slate-200 text-red-600"
+                : "bg-red-600 text-white shadow-xl shadow-red-600/20"
             }`}
           >
             {globalConfig.sn_kill_switch_global
               ? "RESTAURAR SISTEMA"
-              : "🛑 PARADA DE EMERGÊNCIA"}
+              : "🛑 PARADA TOTAL"}
           </button>
         </div>
       </div>
 
-      {/* TOOLBAR DE CONTROLE DE MÓDULOS */}
+      {/* TOOLBAR */}
       <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
         <h2 className="text-sm font-black text-slate-500 uppercase tracking-[0.3em] flex items-center gap-2">
-          <Activity size={16} /> Módulos Operacionais
+          <Activity size={16} /> Módulos Ativos
         </h2>
 
         <div className="flex gap-2 bg-slate-900/40 p-1.5 rounded-2xl border border-slate-800">
@@ -241,18 +243,18 @@ export default function AdminDashboard() {
             onClick={() => toggleAllGames(true)}
             className="flex items-center gap-2 px-4 py-2 rounded-xl text-[10px] font-black uppercase bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-all"
           >
-            <Play size={14} /> Iniciar Todos
+            <Play size={14} /> Play All
           </button>
           <button
             onClick={() => toggleAllGames(false)}
             className="flex items-center gap-2 px-4 py-2 rounded-xl text-[10px] font-black uppercase bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-all"
           >
-            <Pause size={14} /> Pausar Todos
+            <Pause size={14} /> Pause All
           </button>
         </div>
       </div>
 
-      {/* GRID DE MÓDULOS */}
+      {/* GRID DE JOGOS EDITÁVEIS */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
         {games.map((game) => (
           <div
@@ -276,13 +278,15 @@ export default function AdminDashboard() {
                   }`}
                 >
                   {game.sn_ativo && !globalConfig.sn_kill_switch_global
-                    ? "Operando"
-                    : "Pausado"}
+                    ? "Streaming"
+                    : "Standby"}
                 </span>
               </div>
 
               <button
-                onClick={() => toggleGame(game.tp_jogo, game.sn_ativo)}
+                onClick={() =>
+                  updateGameField(game.tp_jogo, "sn_ativo", !game.sn_ativo)
+                }
                 disabled={globalConfig.sn_kill_switch_global}
                 className={`p-3 rounded-xl transition-all ${
                   game.sn_ativo && !globalConfig.sn_kill_switch_global
@@ -295,27 +299,49 @@ export default function AdminDashboard() {
             </div>
 
             <div className="grid grid-cols-2 gap-3">
-              <div className="bg-slate-950/80 p-4 rounded-2xl border border-slate-800/80 flex flex-col opacity-80">
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-[10px] font-black text-slate-500 uppercase">
-                    Aposta{" "}
+              {/* EDITAR APOSTA BASE */}
+              <div className="bg-slate-950/80 p-4 rounded-2xl border border-slate-800 focus-within:border-emerald-500/50 flex flex-col transition-all">
+                <div className="flex items-center gap-2 mb-3">
+                  <Coins size={14} className="text-emerald-500" />
+                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">
+                    Base R$
                   </span>
-                  <Lock size={12} className="text-slate-600" />
                 </div>
-                <span className="text-emerald-400 font-black text-lg">
-                  R$ {game.vl_aposta_base}
-                </span>
+                <input
+                  type="number"
+                  step="0.50"
+                  defaultValue={game.vl_aposta_base}
+                  onBlur={(e) =>
+                    updateGameField(
+                      game.tp_jogo,
+                      "vl_aposta_base",
+                      Number(e.target.value),
+                    )
+                  }
+                  className="bg-transparent font-black text-emerald-400 text-xl outline-none w-full"
+                />
               </div>
-              <div className="bg-slate-950/80 p-4 rounded-2xl border border-slate-800/80 flex flex-col opacity-80">
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-[10px] font-black text-slate-500 uppercase">
-                    Gatilho{" "}
+
+              {/* EDITAR GATILHO SEQUÊNCIA */}
+              <div className="bg-slate-950/80 p-4 rounded-2xl border border-slate-800 focus-within:border-blue-500/50 flex flex-col transition-all">
+                <div className="flex items-center gap-2 mb-3">
+                  <Target size={14} className="text-blue-500" />
+                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">
+                    Gatilho X
                   </span>
-                  <Lock size={12} className="text-slate-600" />
                 </div>
-                <span className="text-white font-black text-lg">
-                  {game.nr_sequencia_alvo}x
-                </span>
+                <input
+                  type="number"
+                  defaultValue={game.nr_sequencia_alvo}
+                  onBlur={(e) =>
+                    updateGameField(
+                      game.tp_jogo,
+                      "nr_sequencia_alvo",
+                      Number(e.target.value),
+                    )
+                  }
+                  className="bg-transparent font-black text-white text-xl outline-none w-full"
+                />
               </div>
             </div>
           </div>
@@ -324,60 +350,57 @@ export default function AdminDashboard() {
 
       {/* HISTÓRICO */}
       <h2 className="text-sm font-black text-slate-500 uppercase tracking-[0.3em] mb-6 flex items-center gap-2">
-        <History size={16} /> Logs de Execução
+        <History size={16} /> Monitor de Sinais (Realtime)
       </h2>
 
       <div className="bg-slate-900/50 border border-slate-800 rounded-[2rem] overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left">
             <thead>
-              <tr className="border-b border-slate-800 bg-slate-950/20">
-                <th className="p-5 text-[10px] font-black text-slate-500 uppercase tracking-widest">
-                  Horário
-                </th>
-                <th className="p-5 text-[10px] font-black text-slate-500 uppercase tracking-widest text-center">
-                  Entrada
-                </th>
-                <th className="p-5 text-[10px] font-black text-slate-500 uppercase tracking-widest">
-                  Valor
-                </th>
-                <th className="p-5 text-[10px] font-black text-slate-500 uppercase tracking-widest">
-                  Status
-                </th>
-                <th className="p-5 text-[10px] font-black text-slate-500 uppercase tracking-widest text-right">
-                  Resultado
-                </th>
+              <tr className="border-b border-slate-800 bg-slate-950/20 text-[10px] font-black text-slate-500 uppercase tracking-widest">
+                <th className="p-5">Timestamp</th>
+                <th className="p-5 text-center">Lado</th>
+                <th className="p-5">Investido</th>
+                <th className="p-5">Status</th>
+                <th className="p-5 text-right">PnL Net</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/50">
               {history.map((item) => (
                 <tr
                   key={item.cd_aposta}
-                  className="hover:bg-slate-800/30 transition-colors"
+                  className="hover:bg-slate-800/30 transition-colors group"
                 >
-                  <td className="p-5 text-sm text-slate-400 italic">
+                  <td className="p-5 text-sm text-slate-400 italic font-medium">
                     {new Date(item.ts_criacao).toLocaleTimeString()}
                   </td>
                   <td className="p-5 text-center">
-                    <span className="text-[10px] font-bold text-blue-400 bg-blue-500/10 px-2 py-1 rounded-lg uppercase">
+                    <span className="text-[10px] font-black text-blue-400 bg-blue-500/10 px-2 py-1 rounded-lg uppercase tracking-tighter">
                       {item.ds_lado_aposta}
                     </span>
                   </td>
-                  <td className="p-5 text-sm font-bold">
+                  <td className="p-5 text-sm font-bold text-slate-300 font-mono">
                     R$ {Number(item.vl_aposta).toFixed(2)}
                   </td>
                   <td className="p-5">
                     <span
-                      className={`text-[10px] font-black uppercase ${item.tp_status === "WIN" ? "text-emerald-400" : "text-red-400"}`}
+                      className={`text-[10px] font-black uppercase px-2 py-1 rounded ${item.tp_status === "WIN" ? "bg-emerald-500/10 text-emerald-400" : "bg-red-500/10 text-red-400"}`}
                     >
                       {item.tp_status}
                     </span>
                   </td>
                   <td
-                    className={`p-5 text-right font-black ${Number(item.vl_lucro_perda) >= 0 ? "text-emerald-400" : "text-red-400"}`}
+                    className={`p-5 text-right font-black font-mono text-base ${Number(item.vl_lucro_perda) >= 0 ? "text-emerald-400" : "text-red-400"}`}
                   >
-                    {Number(item.vl_lucro_perda) >= 0 ? "+" : ""}
-                    {Number(item.vl_lucro_perda).toFixed(2)}
+                    <div className="flex items-center justify-end gap-1">
+                      {Number(item.vl_lucro_perda) >= 0 ? (
+                        <TrendingUp size={14} />
+                      ) : (
+                        <TrendingDown size={14} />
+                      )}
+                      {Number(item.vl_lucro_perda) >= 0 ? "+" : ""}
+                      {Number(item.vl_lucro_perda).toFixed(2)}
+                    </div>
                   </td>
                 </tr>
               ))}
